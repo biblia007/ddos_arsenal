@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ================================================================
-# DDOS ARSENAL – ULTIMATE MAXIMUM v.1.0.0
+# DDOS ARSENAL – v.1.0.0
 # AUTHOR: @biblia007
 # VERSION: 1.0.0
 # STATUS: EXE READY - FULLY WORKING
