@@ -1,0 +1,2047 @@
+-- =====================================================================
+--  СЛЁЗЫ САТАНЫ  v4.0   ·   tg: @maniacsvetov
+--  PART 1/3 — ядро, конфиг, UI-фреймворк, эффекты
+-- =====================================================================
+
+-- kill old
+if _G.SS_INSTANCE and type(_G.SS_INSTANCE.destroy) == "function" then
+    pcall(_G.SS_INSTANCE.destroy)
+end
+_G.SS_INSTANCE = {destroy = function() end}
+
+local cloneref = cloneref or function(o) return o end
+local Players    = cloneref(game:GetService("Players"))
+local RunService = cloneref(game:GetService("RunService"))
+local UIS        = cloneref(game:GetService("UserInputService"))
+local WS         = cloneref(game:GetService("Workspace"))
+local CG         = cloneref(game:GetService("CoreGui"))
+local HS         = game:GetService("HttpService")
+local TS         = game:GetService("TweenService")
+local LP         = Players.LocalPlayer
+local Mouse      = LP:GetMouse()
+local Cam        = WS.CurrentCamera
+
+local VERSION  = "4.0"
+local TELEGRAM = "@maniacsvetov"
+local TG_URL   = "t.me/maniacsvetov"
+
+-- ===================== CACHE OPTIMIZATION =====================
+local cache = {
+    players = {},
+    charCache = setmetatable({}, {__mode = "k"}),
+    roleCache = {},
+    lastRoleUpdate = 0,
+}
+local ROLE_REFRESH = 0.5
+
+-- обновление кэша игроков (раз в 0.5с, не каждый кадр)
+task.spawn(function()
+    while true do
+        local now = tick()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            cache.players[plr] = true
+        end
+        if now - cache.lastRoleUpdate > ROLE_REFRESH then
+            cache.lastRoleUpdate = now
+            for _, plr in ipairs(Players:GetPlayers()) do
+                cache.roleCache[plr] = nil
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- ===================== EXECUTOR =====================
+local RAND = tostring(math.random(1e6, 9e6))
+local GUI_NAME = "ss_" .. RAND
+local protect_gui = protect_gui or (syn and syn.protect_gui) or nil
+local function safe_gui()
+    if protect_gui then pcall(protect_gui, GUI_NAME) end
+    if gethui then return gethui() end
+    return CG
+end
+if setthreadidentity then pcall(setthreadidentity, 8) end
+if setfflag then pcall(setfflag, "TaskSchedulerTargetFps", "9999") end
+
+if not Drawing then
+    warn("[SS] Drawing отсутствует — ESP уйдёт в Highlight")
+    local function noop() end
+    Drawing = setmetatable({}, {__index = function()
+        return setmetatable({}, {__index = function() return noop end, __newindex = function() end})
+    end})
+end
+
+-- ===================== COLORS =====================
+local function c3(t)
+    if type(t) ~= "table" then return Color3.fromRGB(80, 255, 140) end
+    return Color3.fromRGB(
+        math.clamp(math.floor(tonumber(t[1]) or 80), 0, 255),
+        math.clamp(math.floor(tonumber(t[2]) or 255), 0, 255),
+        math.clamp(math.floor(tonumber(t[3]) or 140), 0, 255)
+    )
+end
+local function fixColor(t, fb)
+    if type(t) ~= "table" then return fb end
+    local r,g,b = tonumber(t[1]),tonumber(t[2]),tonumber(t[3])
+    if not (r and g and b) then return fb end
+    return {math.clamp(math.floor(r),0,255), math.clamp(math.floor(g),0,255), math.clamp(math.floor(b),0,255)}
+end
+
+local FONT = {
+    title = Enum.Font.BuilderSansExtraBold,
+    bold  = Enum.Font.BuilderSansBold,
+    med   = Enum.Font.BuilderSansMedium,
+    reg   = Enum.Font.BuilderSans,
+}
+
+-- ===================== CONFIG =====================
+local DEFAULT_ACCENT = {80, 255, 140}
+local CFG = {
+    version = VERSION,
+    -- aim
+    aim_enabled = false, aim_key = "RMB", aim_fov = 120, aim_smooth = 0.18,
+    aim_part = "Head", aim_mode = "Camera", aim_prediction = 0.05,
+    aim_dist_limit = 1000, aim_nearest_to_crosshair = true,
+    aim_ignore_innocent = false, aim_ignore_sheriff = false,
+    aim_wall_check = false, auto_fire = false, auto_fire_delay = 60,
+    -- trigger
+    trigger_enabled = false, trigger_delay = 60, trigger_key = "None",
+    trigger_mode = "Cursor",
+    -- recoil
+    norecoil = false, norecoil_strength = 0.5,
+    -- esp
+    esp_enabled = true, esp_box = true, esp_fill = false,
+    esp_fill_transparency = 0.15,
+    esp_skel = true, esp_name = true, esp_health = true,
+    esp_dist = true, esp_tracer = false, esp_weapon = true,
+    esp_role_text = true, esp_drop_items = true,
+    esp_thickness = 1.5, esp_skel_thickness = 1.5,
+    esp_dist_limit = 1500, esp_role_color = true,
+    esp_team_check = false, streamer_mode = false,
+    -- glow
+    glow_enabled = false, glow_fill_transp = 0.55,
+    -- visual
+    fov_circle = true, fov_pulse = true,
+    fov_color = {80,255,140}, aim_fov_color = {255,80,160},
+    watermark = true, fps_counter = true, tg_watermark = true,
+    hitmarker = true, particles = true, aurora = true, anim = true,
+    -- ui
+    accent = DEFAULT_ACCENT, menu_key = "RightShift", panic_key = "End",
+    auto_rejoin_on_death = false, menu_scale = 1.0,
+    -- roles
+    role_colors = {
+        Innocent = {80, 255, 140}, Sheriff = {80, 200, 255},
+        Killer   = {255, 60, 80},  Unknown = {200, 200, 200},
+    },
+}
+
+local MODES = {
+    LEGIT = {
+        aim_fov = 60, aim_smooth = 0.55, aim_prediction = 0.03,
+        aim_part = "Head", aim_wall_check = true, aim_mode = "Mouse",
+        trigger_delay = 120, trigger_enabled = false, auto_fire = false,
+        esp_thickness = 1, esp_skel_thickness = 1,
+    },
+    MEDIUM = {
+        aim_fov = 140, aim_smooth = 0.25, aim_prediction = 0.06,
+        aim_part = "Head", aim_wall_check = false, aim_mode = "Camera",
+        trigger_delay = 60, trigger_enabled = true, auto_fire = false,
+        esp_thickness = 1.5, esp_skel_thickness = 1.5,
+    },
+    RAGE = {
+        aim_fov = 360, aim_smooth = 0.02, aim_prediction = 0.12,
+        aim_part = "HumanoidRootPart", aim_wall_check = false, aim_mode = "Camera",
+        trigger_delay = 0, trigger_enabled = true, auto_fire = true,
+        esp_thickness = 2, esp_skel_thickness = 2,
+    },
+}
+local currentMode = "MEDIUM"
+
+-- ===================== JSON =====================
+local HAS_FS = writefile and readfile and isfile
+local CFG_PATH = "ss_v4.json"
+local POS_PATH = "ss_v4_pos.json"
+
+local function saveCfg()
+    if not HAS_FS then return end
+    local ok, enc = pcall(function() return HS:JSONEncode(CFG) end)
+    if ok then pcall(writefile, CFG_PATH, enc) end
+end
+local function loadCfg()
+    if not HAS_FS or not isfile(CFG_PATH) then return end
+    local ok, data = pcall(readfile, CFG_PATH)
+    if not ok or not data then return end
+    local ok2, tbl = pcall(function() return HS:JSONDecode(data) end)
+    if ok2 and type(tbl) == "table" then
+        if tbl.version ~= VERSION then pcall(delfile, CFG_PATH); return end
+        for k, v in pairs(tbl) do if CFG[k] ~= nil then CFG[k] = v end end
+    end
+end
+local function savePos(pos)
+    if not HAS_FS then return end
+    pcall(writefile, POS_PATH, HS:JSONEncode({x = pos.X.Offset, y = pos.Y.Offset}))
+end
+local function loadPos()
+    if not HAS_FS or not isfile(POS_PATH) then return nil end
+    local ok, data = pcall(readfile, POS_PATH)
+    if not ok then return nil end
+    local ok2, tbl = pcall(function() return HS:JSONDecode(data) end)
+    if ok2 and tbl and type(tbl.x)=="number" and type(tbl.y)=="number" then return tbl end
+    return nil
+end
+loadCfg()
+
+-- validation
+CFG.accent        = fixColor(CFG.accent, DEFAULT_ACCENT)
+CFG.esp_color     = fixColor(CFG.esp_color, DEFAULT_ACCENT)
+CFG.esp_box_color = fixColor(CFG.esp_box_color, DEFAULT_ACCENT)
+CFG.fov_color     = fixColor(CFG.fov_color, DEFAULT_ACCENT)
+CFG.aim_fov_color = fixColor(CFG.aim_fov_color, {255,80,160})
+for k, v in pairs({Innocent={80,255,140},Sheriff={80,200,255},Killer={255,60,80},Unknown={200,200,200}}) do
+    CFG.role_colors[k] = fixColor(CFG.role_colors[k], v)
+end
+for _, k in ipairs({"aim_fov","aim_smooth","aim_prediction","aim_dist_limit",
+                    "trigger_delay","norecoil_strength","esp_thickness","esp_skel_thickness",
+                    "esp_dist_limit","glow_fill_transp","auto_fire_delay","menu_scale",
+                    "esp_fill_transparency"}) do
+    CFG[k] = tonumber(CFG[k]) or CFG[k]
+end
+CFG.menu_scale = math.clamp(CFG.menu_scale or 1.0, 0.8, 1.3)
+
+-- ===================== UI PRIMITIVES =====================
+local gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 9999
+gui.Parent = safe_gui()
+
+local function new(inst, props, parent)
+    local o = Instance.new(inst)
+    for k, v in pairs(props or {}) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
+end
+local function corner(p, r) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, p) end
+local function stroke(p, col, th, tr, mode)
+    return new("UIStroke", {Color = col, Thickness = th or 1.2, Transparency = tr or 0.25,
+        ApplyStrokeMode = mode or Enum.ApplyStrokeMode.Border}, p)
+end
+local function grad(p, c1, c2, rot)
+    return new("UIGradient", {Color = ColorSequence.new(c1, c2), Rotation = rot or 45}, p)
+end
+local function tw(inst, ti, goal)
+    local t = TS:Create(inst, TweenInfo.new(ti or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), goal)
+    t:Play(); return t
+end
+local function pad(p, t, b, l, r)
+    return new("UIPadding", {PaddingTop = UDim.new(0,t or 0), PaddingBottom = UDim.new(0,b or 0),
+        PaddingLeft = UDim.new(0,l or 0), PaddingRight = UDim.new(0,r or 0)}, p)
+end
+
+-- ===================== BACKGROUND AURORA =====================
+-- полноэкранный слой позади меню, но поверх игры
+local auroraBG = new("Frame", {
+    Size = UDim2.new(1,0,1,0), Position = UDim2.new(0,0,0,0),
+    BackgroundTransparency = 1, BorderSizePixel = 0,
+    Visible = false, ZIndex = -1, Parent = gui,
+})
+if CFG.particles then
+    for i = 1, 24 do
+        local orb = new("Frame", {
+            Size = UDim2.new(0, math.random(6, 18), 0, math.random(6, 18)),
+            Position = UDim2.new(math.random(), 0, math.random(), 0),
+            BackgroundColor3 = (i % 2 == 0) and c3(CFG.accent) or Color3.fromRGB(60, 200, 120),
+            BackgroundTransparency = math.random(85, 95)/100,
+            BorderSizePixel = 0, Parent = auroraBG,
+        })
+        corner(orb, 999)
+        task.spawn(function()
+            while orb.Parent do
+                local nx = math.clamp(orb.Position.X.Scale + (math.random()-0.5)*0.05, 0, 1)
+                local ny = math.clamp(orb.Position.Y.Scale + (math.random()-0.5)*0.05, 0, 1)
+                tw(orb, 4, {Position = UDim2.new(nx, 0, ny, 0)})
+                task.wait(4)
+            end
+        end)
+    end
+end
+
+-- ===================== LAUNCH OVERLAY =====================
+local launch = new("Frame", {
+    Size = UDim2.new(0, 480, 0, 320),
+    Position = UDim2.new(0.5, -240, 0.5, -160),
+    BackgroundColor3 = Color3.fromRGB(8, 12, 10),
+    BorderSizePixel = 0, Parent = gui, ZIndex = 100,
+})
+corner(launch, 16)
+local launchStroke = stroke(launch, c3(CFG.accent), 2, 0.05)
+grad(launch, Color3.fromRGB(18, 30, 24), Color3.fromRGB(6, 10, 8), 135)
+
+-- пульсация border
+task.spawn(function()
+    while launch.Parent do
+        tw(launchStroke, 1.4, {Transparency = 0.02})
+        task.wait(1.5)
+        tw(launchStroke, 1.4, {Transparency = 0.5})
+        task.wait(1.5)
+    end
+end)
+
+new("TextLabel", {
+    Size = UDim2.new(1,0,0,48), Position = UDim2.new(0,0,0,24),
+    BackgroundTransparency = 1, Text = "СЛЁЗЫ САТАНЫ",
+    Font = FONT.title, TextSize = 34, TextColor3 = c3(CFG.accent), Parent = launch, ZIndex = 101,
+})
+new("TextLabel", {
+    Size = UDim2.new(1,0,0,18), Position = UDim2.new(0,0,0,72),
+    BackgroundTransparency = 1, Text = "v"..VERSION.."  ·  mm2  ·  "..TG_URL,
+    Font = FONT.reg, TextSize = 11, TextColor3 = Color3.fromRGB(150,180,160), Parent = launch, ZIndex = 101,
+})
+new("Frame", {
+    Size = UDim2.new(1,-60,0,1), Position = UDim2.new(0,30,0,112),
+    BackgroundColor3 = c3(CFG.accent), BackgroundTransparency = 0.5,
+    BorderSizePixel = 0, Parent = launch, ZIndex = 101,
+})
+
+local launchStatus = new("TextLabel", {
+    Size = UDim2.new(1,0,0,16), Position = UDim2.new(0,0,0,124),
+    BackgroundTransparency = 1, Text = "нажми войти чтобы открыть меню",
+    Font = FONT.reg, TextSize = 11, TextColor3 = Color3.fromRGB(170,180,175),
+    Parent = launch, ZIndex = 101,
+})
+
+local enterButton = new("TextButton", {
+    Size = UDim2.new(1,-80,0,58), Position = UDim2.new(0,40,0,158),
+    BackgroundColor3 = c3(CFG.accent), Text = "ВОЙТИ",
+    Font = FONT.title, TextSize = 22, TextColor3 = Color3.fromRGB(8,20,12),
+    AutoButtonColor = false, Parent = launch, ZIndex = 101,
+})
+corner(enterButton, 12)
+stroke(enterButton, Color3.fromRGB(220,255,230), 1.6, 0.35)
+enterButton.MouseEnter:Connect(function()
+    tw(enterButton, 0.12, {BackgroundColor3 = Color3.fromRGB(140,255,180)})
+end)
+enterButton.MouseLeave:Connect(function()
+    tw(enterButton, 0.12, {BackgroundColor3 = c3(CFG.accent)})
+end)
+
+local launchTg = new("TextButton", {
+    Size = UDim2.new(1,-80,0,30), Position = UDim2.new(0,40,0,228),
+    BackgroundColor3 = Color3.fromRGB(18,26,22), Text = "tg  "..TG_URL,
+    Font = FONT.bold, TextSize = 12, TextColor3 = Color3.fromRGB(120,220,160),
+    AutoButtonColor = false, Parent = launch, ZIndex = 101,
+})
+corner(launchTg, 6)
+stroke(launchTg, Color3.fromRGB(60,160,110), 1, 0.4)
+launchTg.MouseButton1Click:Connect(function()
+    if setclipboard then pcall(setclipboard, TELEGRAM) end
+    launchStatus.Text = "tg скопирован: "..TELEGRAM
+end)
+
+new("TextLabel", {
+    Size = UDim2.new(1,0,0,14), Position = UDim2.new(0,0,1,-22),
+    BackgroundTransparency = 1, Text = "external read-only · mm2 only",
+    Font = FONT.reg, TextSize = 10, TextColor3 = Color3.fromRGB(110,130,120),
+    Parent = launch, ZIndex = 101,
+})
+
+-- ===================== MAIN WINDOW =====================
+local W, H = 820, 540
+local savedPos = loadPos()
+local main = new("Frame", {
+    Size = UDim2.new(0, W * CFG.menu_scale, 0, H * CFG.menu_scale),
+    Position = savedPos
+        and UDim2.new(0, savedPos.x, 0, savedPos.y)
+        or UDim2.new(0.5, -W*CFG.menu_scale/2, 0.5, -H*CFG.menu_scale/2),
+    BackgroundColor3 = Color3.fromRGB(8, 11, 9),
+    BorderSizePixel = 0, Parent = gui, ClipsDescendants = true, Visible = false,
+})
+corner(main, 16)
+local mainStroke = stroke(main, c3(CFG.accent), 1.6, 0.15)
+grad(main, Color3.fromRGB(16, 24, 18), Color3.fromRGB(6, 9, 7), 135)
+
+if CFG.aurora then
+    task.spawn(function()
+        while main.Parent do
+            tw(mainStroke, 1.2, {Transparency = 0.02})
+            task.wait(1.3)
+            tw(mainStroke, 1.2, {Transparency = 0.45})
+            task.wait(1.3)
+        end
+    end)
+end
+
+-- scanline
+local scan = new("Frame", {
+    Size = UDim2.new(1,0,0,2), Position = UDim2.new(0,0,0,0),
+    BackgroundColor3 = c3(CFG.accent), BackgroundTransparency = 0.8,
+    BorderSizePixel = 0, Parent = main, ZIndex = 2,
+})
+task.spawn(function()
+    while scan.Parent do
+        scan.Position = UDim2.new(0,0,0,0)
+        tw(scan, 2.6, {Position = UDim2.new(0,0,1,0)})
+        task.wait(2.7)
+    end
+end)
+
+-- ===================== TOPBAR =====================
+local topbar = new("Frame", {
+    Size = UDim2.new(1,-20,0,54), Position = UDim2.new(0,10,0,10),
+    BackgroundColor3 = Color3.fromRGB(14,20,16), BorderSizePixel = 0,
+    Parent = main, ZIndex = 4,
+})
+corner(topbar, 12)
+stroke(topbar, c3(CFG.accent), 1, 0.5)
+grad(topbar, Color3.fromRGB(22,32,26), Color3.fromRGB(10,14,12), 90)
+
+new("TextLabel", {
+    Size = UDim2.new(0,280,0,22), Position = UDim2.new(0,16,0,6),
+    BackgroundTransparency = 1, Text = "СЛЁЗЫ САТАНЫ",
+    Font = FONT.title, TextSize = 19, TextColor3 = c3(CFG.accent),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = topbar,
+})
+new("TextLabel", {
+    Size = UDim2.new(0,280,0,14), Position = UDim2.new(0,16,0,30),
+    BackgroundTransparency = 1, Text = "v"..VERSION.."  ·  "..TG_URL,
+    Font = FONT.reg, TextSize = 10, TextColor3 = Color3.fromRGB(140,170,155),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = topbar,
+})
+
+local tgBadge = new("TextButton", {
+    Size = UDim2.new(0,150,0,28), Position = UDim2.new(1,-300,0,13),
+    BackgroundColor3 = Color3.fromRGB(16,24,20), Text = TG_URL,
+    Font = FONT.bold, TextSize = 12, TextColor3 = Color3.fromRGB(120,220,160),
+    AutoButtonColor = false, Parent = topbar,
+})
+corner(tgBadge, 6)
+stroke(tgBadge, Color3.fromRGB(60,160,110), 1, 0.4)
+
+local minBtn = new("TextButton", {
+    Size = UDim2.new(0,30,0,28), Position = UDim2.new(1,-140,0,13),
+    BackgroundColor3 = Color3.fromRGB(24,32,26), Text = "—",
+    Font = FONT.bold, TextSize = 16, TextColor3 = Color3.fromRGB(230,240,235),
+    AutoButtonColor = false, Parent = topbar,
+})
+corner(minBtn, 6)
+
+local closeBtn = new("TextButton", {
+    Size = UDim2.new(0,30,0,28), Position = UDim2.new(1,-104,0,13),
+    BackgroundColor3 = Color3.fromRGB(150,40,60), Text = "×",
+    Font = FONT.bold, TextSize = 17, TextColor3 = Color3.fromRGB(255,255,255),
+    AutoButtonColor = false, Parent = topbar,
+})
+corner(closeBtn, 6)
+closeBtn.MouseButton1Click:Connect(function() gui.Enabled = not gui.Enabled end)
+
+-- ===================== SIDEBAR =====================
+local sidebar = new("Frame", {
+    Size = UDim2.new(0,210,1,-150), Position = UDim2.new(0,10,0,72),
+    BackgroundColor3 = Color3.fromRGB(10,14,11), BorderSizePixel = 0,
+    Parent = main, ZIndex = 3,
+})
+corner(sidebar, 12)
+stroke(sidebar, c3(CFG.accent), 1, 0.6)
+
+local SECTIONS = {
+    {name="AIM",     icon="◎"},
+    {name="TRIGGER", icon="⌖"},
+    {name="ESP",     icon="◉"},
+    {name="VISUAL",  icon="✦"},
+    {name="CONFIG",  icon="⚙"},
+}
+local tabBtns, pages, tabInds = {}, {}, {}
+local activeTab = "AIM"
+local pageTitle
+
+local function selectTab(name)
+    activeTab = name
+    for n, b in pairs(tabBtns) do
+        local on = (n == name)
+        tw(b, 0.12, {BackgroundColor3 = on and Color3.fromRGB(22,38,28) or Color3.fromRGB(14,20,16)})
+        tw(b, 0.12, {TextColor3 = on and Color3.fromRGB(255,255,255) or Color3.fromRGB(150,165,158)})
+        tabInds[n].BackgroundTransparency = on and 0 or 1
+    end
+    for n, p in pairs(pages) do
+        p.Visible = (n == name)
+        if p.Visible and CFG.anim then
+            p.Position = UDim2.new(0, 238, 0, 72)
+            tw(p, 0.18, {Position = UDim2.new(0, 228, 0, 72)})
+        end
+    end
+    if pageTitle then pageTitle.Text = name end
+end
+
+for i, tab in ipairs(SECTIONS) do
+    local b = new("TextButton", {
+        Size = UDim2.new(1,-20,0,40), Position = UDim2.new(0,10,0,10 + (i-1)*46),
+        BackgroundColor3 = Color3.fromRGB(14,20,16),
+        Text = "  "..tab.icon.."    "..tab.name,
+        Font = FONT.med, TextSize = 13,
+        TextColor3 = Color3.fromRGB(150,165,158),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        AutoButtonColor = false, Parent = sidebar, ZIndex = 4,
+    })
+    corner(b, 8)
+    tabBtns[tab.name] = b
+
+    local ind = new("Frame", {
+        Size = UDim2.new(0,3,0,24), Position = UDim2.new(0,-1,0.5,-12),
+        BackgroundColor3 = c3(CFG.accent), BorderSizePixel = 0,
+        BackgroundTransparency = 1, Parent = b, ZIndex = 5,
+    })
+    corner(ind, 2)
+    tabInds[tab.name] = ind
+
+    b.MouseButton1Click:Connect(function()
+        selectTab(tab.name)
+        local rip = new("Frame", {
+            Size = UDim2.new(0,10,0,10), Position = UDim2.new(0.5,-5,0.5,-5),
+            BackgroundColor3 = c3(CFG.accent), BackgroundTransparency = 0.5,
+            BorderSizePixel = 0, Parent = b, ZIndex = 6,
+        })
+        corner(rip, 100)
+        tw(rip, 0.4, {Size = UDim2.new(0,240,0,240), Position = UDim2.new(0.5,-120,0.5,-120), BackgroundTransparency = 1})
+        task.delay(0.45, function() rip:Destroy() end)
+    end)
+    b.MouseEnter:Connect(function()
+        if activeTab ~= tab.name then
+            tw(b, 0.12, {BackgroundColor3 = Color3.fromRGB(18,28,22)})
+        end
+    end)
+    b.MouseLeave:Connect(function()
+        if activeTab ~= tab.name then
+            tw(b, 0.12, {BackgroundColor3 = Color3.fromRGB(14,20,16)})
+        end
+    end)
+
+    local pg = new("ScrollingFrame", {
+        Size = UDim2.new(1,-460,1,-150), Position = UDim2.new(0,228,0,72),
+        BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = c3(CFG.accent),
+        CanvasSize = UDim2.new(0,0,0,0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ZIndex = 4, Parent = main,
+    })
+    local list = new("UIListLayout", {Padding = UDim.new(0, 6), Parent = pg})
+    list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        pg.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 24)
+    end)
+    pages[tab.name] = pg
+end
+
+local pageHeader = new("Frame", {
+    Size = UDim2.new(1,-460,0,28), Position = UDim2.new(0,228,0,44),
+    BackgroundTransparency = 1, Parent = main, ZIndex = 5,
+})
+pageTitle = new("TextLabel", {
+    Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, Text = "AIM",
+    Font = FONT.title, TextSize = 16, TextColor3 = c3(CFG.accent),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = pageHeader, ZIndex = 5,
+})
+
+-- ===================== QUICK BAR =====================
+local quick = new("Frame", {
+    Size = UDim2.new(0,210,1,-150), Position = UDim2.new(1,-220,0,72),
+    BackgroundColor3 = Color3.fromRGB(10,14,11), BorderSizePixel = 0,
+    Parent = main, ZIndex = 3,
+})
+corner(quick, 12)
+stroke(quick, c3(CFG.accent), 1, 0.6)
+
+new("TextLabel", {
+    Size = UDim2.new(1,-20,0,20), Position = UDim2.new(0,10,0,8),
+    BackgroundTransparency = 1, Text = "QUICK",
+    Font = FONT.bold, TextSize = 11, TextColor3 = c3(CFG.accent),
+    TextXAlignment = Enum.TextXAlignment.Left, Parent = quick,
+})
+new("Frame", {
+    Size = UDim2.new(1,-20,0,1), Position = UDim2.new(0,10,0,30),
+    BackgroundColor3 = c3(CFG.accent), BackgroundTransparency = 0.6,
+    BorderSizePixel = 0, Parent = quick,
+})
+
+local quickBtns = {}
+local function quickBtn(y, label, key)
+    local b = new("TextButton", {
+        Size = UDim2.new(1,-20,0,34), Position = UDim2.new(0,10,0,y),
+        BackgroundColor3 = CFG[key] and Color3.fromRGB(22,44,30) or Color3.fromRGB(16,22,18),
+        Text = label, Font = FONT.bold, TextSize = 12,
+        TextColor3 = CFG[key] and c3(CFG.accent) or Color3.fromRGB(180,190,185),
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        AutoButtonColor = false, Parent = quick,
+    })
+    corner(b, 6)
+    stroke(b, c3(CFG.accent), 1, CFG[key] and 0.2 or 0.7)
+    b.MouseButton1Click:Connect(function()
+        CFG[key] = not CFG[key]
+        b.BackgroundColor3 = CFG[key] and Color3.fromRGB(22,44,30) or Color3.fromRGB(16,22,18)
+        b.TextColor3 = CFG[key] and c3(CFG.accent) or Color3.fromRGB(180,190,185)
+        saveCfg()
+    end)
+    quickBtns[key] = b
+end
+
+quickBtn(42,  "AIM",        "aim_enabled")
+quickBtn(88,  "TRIGGER",    "trigger_enabled")
+quickBtn(134, "ESP",        "esp_enabled")
+quickBtn(180, "GLOW",       "glow_enabled")
+quickBtn(226, "NO-RECOIL",  "norecoil")
+quickBtn(272, "FOV CIRCLE", "fov_circle")
+quickBtn(318, "STREAMER",   "streamer_mode")
+
+local panicBtn = new("TextButton", {
+    Size = UDim2.new(1,-20,0,38), Position = UDim2.new(0,10,1,-52),
+    BackgroundColor3 = Color3.fromRGB(60,18,26), Text = "PANIC",
+    Font = FONT.title, TextSize = 13, TextColor3 = Color3.fromRGB(255,140,140),
+    AutoButtonColor = false, Parent = quick,
+})
+corner(panicBtn, 6)
+stroke(panicBtn, Color3.fromRGB(200,60,80), 1, 0.4)
+panicBtn.MouseButton1Click:Connect(function()
+    CFG.aim_enabled = false; CFG.esp_enabled = false; CFG.trigger_enabled = false
+    CFG.glow_enabled = false; CFG.norecoil = false; CFG.auto_fire = false
+    for k, b in pairs(quickBtns) do
+        b.BackgroundColor3 = Color3.fromRGB(16,22,18)
+        b.TextColor3 = Color3.fromRGB(180,190,185)
+    end
+    if setStatus then setStatus("PANIC") end
+end)
+
+new("TextLabel", {
+    Size = UDim2.new(1,-20,0,16), Position = UDim2.new(0,10,1,-76),
+    BackgroundTransparency = 1, Text = "role colors:",
+    Font = FONT.reg, TextSize = 10, TextColor3 = Color3.fromRGB(150,165,158),
+    TextXAlignment = Enum.TextXAlignment.Left, Parent = quick,
+})
+local previewRow = new("Frame", {
+    Size = UDim2.new(1,-20,0,16), Position = UDim2.new(0,10,1,-58),
+    BackgroundTransparency = 1, Parent = quick,
+})
+for i, r in ipairs({"Innocent","Sheriff","Killer"}) do
+    local dot = new("Frame", {
+        Size = UDim2.new(0,12,0,12), Position = UDim2.new(0, (i-1)*22, 0, 2),
+        BackgroundColor3 = c3(CFG.role_colors[r]), BorderSizePixel = 0, Parent = previewRow,
+    })
+    corner(dot, 6)
+    stroke(dot, Color3.fromRGB(255,255,255), 1, 0.6)
+end
+
+-- ===================== STATUS BAR =====================
+local statusBar = new("Frame", {
+    Size = UDim2.new(1,-20,0,28), Position = UDim2.new(0,10,1,-36),
+    BackgroundColor3 = Color3.fromRGB(10,14,11), BorderSizePixel = 0,
+    Parent = main, ZIndex = 3,
+})
+corner(statusBar, 8)
+stroke(statusBar, c3(CFG.accent), 1, 0.6)
+
+new("TextLabel", {
+    Size = UDim2.new(0,40,1,0), Position = UDim2.new(0,8,0,0),
+    BackgroundTransparency = 1, Text = "◈",
+    Font = FONT.bold, TextSize = 13, TextColor3 = c3(CFG.accent), Parent = statusBar,
+})
+local status = new("TextLabel", {
+    Size = UDim2.new(1,-340,1,0), Position = UDim2.new(0,30,0,0),
+    BackgroundTransparency = 1, Text = "",
+    Font = FONT.reg, TextSize = 11, TextColor3 = Color3.fromRGB(180,190,185),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = statusBar,
+})
+local modeLbl = new("TextLabel", {
+    Size = UDim2.new(0,110,1,0), Position = UDim2.new(1,-270,0,0),
+    BackgroundTransparency = 1, Text = "MODE: "..currentMode,
+    Font = FONT.bold, TextSize = 11, TextColor3 = c3(CFG.accent),
+    TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = statusBar,
+})
+new("TextLabel", {
+    Size = UDim2.new(0,160,1,0), Position = UDim2.new(1,-150,0,0),
+    BackgroundTransparency = 1, Text = TG_URL,
+    Font = FONT.bold, TextSize = 11, TextColor3 = Color3.fromRGB(120,220,160),
+    TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd,
+    Parent = statusBar,
+})
+function setStatus(s)
+    status.Text = s
+    task.delay(3, function() if status.Text == s then status.Text = "" end end)
+end
+
+-- ===================== WIDGETS =====================
+local function section(parent, title)
+    local f = new("Frame", {Size = UDim2.new(1,0,0,26), BackgroundTransparency = 1, Parent = parent})
+    new("TextLabel", {
+        Size = UDim2.new(1,-10,1,0), Position = UDim2.new(0,4,0,0),
+        BackgroundTransparency = 1, Text = title,
+        Font = FONT.bold, TextSize = 11, TextColor3 = c3(CFG.accent),
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = f,
+    })
+    new("Frame", {
+        Size = UDim2.new(1,-20,0,1), Position = UDim2.new(0,10,1,-2),
+        BackgroundColor3 = c3(CFG.accent), BackgroundTransparency = 0.7, BorderSizePixel = 0, Parent = f,
+    })
+    return f
+end
+
+local function card(parent, height)
+    local f = new("Frame", {
+        Size = UDim2.new(1,-4,0,height or 32),
+        BackgroundColor3 = Color3.fromRGB(14,20,16), BorderSizePixel = 0, Parent = parent,
+    })
+    corner(f, 8)
+    local s = stroke(f, Color3.fromRGB(40,60,50), 1, 0.5)
+    f.MouseEnter:Connect(function() tw(s, 0.12, {Color = c3(CFG.accent), Transparency = 0.3}) end)
+    f.MouseLeave:Connect(function() tw(s, 0.12, {Color = Color3.fromRGB(40,60,50), Transparency = 0.5}) end)
+    return f
+end
+
+local function label(parent, text, size, xAlign, col)
+    return new("TextLabel", {
+        Size = UDim2.new(1,-24,1,0), Position = UDim2.new(0,12,0,0),
+        BackgroundTransparency = 1, Text = text,
+        Font = FONT.reg, TextSize = size or 13,
+        TextColor3 = col or Color3.fromRGB(225,235,230),
+        TextXAlignment = xAlign or Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, Parent = parent,
+    })
+end
+
+local function toggle(parent, lbl, key, cb)
+    local r = card(parent, 32)
+    label(r, lbl, 13)
+    local ind = new("Frame", {
+        Size = UDim2.new(0,38,0,20), Position = UDim2.new(1,-50,0.5,-10),
+        BackgroundColor3 = CFG[key] and c3(CFG.accent) or Color3.fromRGB(48,60,54), Parent = r,
+    })
+    corner(ind, 10)
+    local indStroke = stroke(ind, c3(CFG.accent), 1, CFG[key] and 0.2 or 1)
+    local knob = new("Frame", {
+        Size = UDim2.new(0,16,0,16),
+        Position = CFG[key] and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8),
+        BackgroundColor3 = Color3.fromRGB(255,255,255), Parent = ind,
+    })
+    corner(knob, 8)
+    r.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            CFG[key] = not CFG[key]
+            ind.BackgroundColor3 = CFG[key] and c3(CFG.accent) or Color3.fromRGB(48,60,54)
+            indStroke.Transparency = CFG[key] and 0.2 or 1
+            tw(knob, 0.12, {Position = CFG[key] and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)})
+            if cb then cb(CFG[key]) end
+            saveCfg(); setStatus(lbl..": "..tostring(CFG[key]))
+        end
+    end)
+end
+
+local function slider(parent, lbl, key, min, max, step, fmt, cb)
+    local r = card(parent, 48)
+    new("TextLabel", {
+        Size = UDim2.new(1,-110,0,18), Position = UDim2.new(0,12,0,4),
+        BackgroundTransparency = 1, Text = lbl,
+        Font = FONT.reg, TextSize = 13, TextColor3 = Color3.fromRGB(225,235,230),
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
+    })
+    local valLbl = new("TextLabel", {
+        Size = UDim2.new(0,100,0,18), Position = UDim2.new(1,-112,0,4),
+        BackgroundTransparency = 1, Text = fmt and fmt(CFG[key]) or tostring(CFG[key]),
+        Font = FONT.med, TextSize = 12, TextColor3 = c3(CFG.accent),
+        TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
+    })
+    local track = new("Frame", {
+        Size = UDim2.new(1,-24,0,4), Position = UDim2.new(0,12,0,32),
+        BackgroundColor3 = Color3.fromRGB(40,52,46), Parent = r,
+    })
+    corner(track, 2)
+    local fill = new("Frame", {
+        Size = UDim2.new(math.clamp((CFG[key]-min)/(max-min),0,1),0,1,0),
+        BackgroundColor3 = c3(CFG.accent), Parent = track,
+    })
+    corner(fill, 2)
+    local knob = new("Frame", {
+        Size = UDim2.new(0,12,0,12),
+        Position = UDim2.new(math.clamp((CFG[key]-min)/(max-min),0,1),-6,0.5,-6),
+        BackgroundColor3 = Color3.fromRGB(255,255,255), Parent = track,
+    })
+    corner(knob, 6)
+    stroke(knob, c3(CFG.accent), 1.5, 0.2)
+
+    local dragging = false
+    local function upd(x)
+        pcall(function()
+            local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+            local v = min + (max - min) * rel
+            v = math.floor(v/step + 0.5) * step
+            CFG[key] = v
+            fill.Size = UDim2.new(rel,0,1,0)
+            knob.Position = UDim2.new(rel,-6,0.5,-6)
+            valLbl.Text = fmt and fmt(v) or tostring(v)
+            if cb then cb(v) end
+            saveCfg()
+        end)
+    end
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; pcall(function() upd(i.Position.X) end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        pcall(function() upd(i.Position.X) end)
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+end
+
+local function dropdown(parent, lbl, key, options, cb)
+    local r = card(parent, 32)
+    label(r, lbl, 13)
+    local btn = new("TextButton", {
+        Size = UDim2.new(0,150,0,24), Position = UDim2.new(1,-160,0.5,-12),
+        BackgroundColor3 = Color3.fromRGB(22,28,24), Text = tostring(CFG[key]),
+        Font = FONT.reg, TextSize = 12, TextColor3 = Color3.fromRGB(220,230,225),
+        AutoButtonColor = false, Parent = r,
+    })
+    corner(btn, 6); stroke(btn, Color3.fromRGB(50,68,58), 1, 0.4)
+    local list = new("Frame", {
+        Size = UDim2.new(0,150,0,0), Position = UDim2.new(1,-160,1,4),
+        BackgroundColor3 = Color3.fromRGB(12,16,13), Visible = false,
+        Parent = r, ClipsDescendants = true, ZIndex = 8,
+    })
+    corner(list, 6); stroke(list, c3(CFG.accent), 1, 0.4)
+    new("UIListLayout", {Padding = UDim.new(0,2), Parent = list})
+    pad(list, 4, 4, 0, 0)
+    for _, opt in ipairs(options) do
+        local ob = new("TextButton", {
+            Size = UDim2.new(1,0,0,24), BackgroundTransparency = 1, Text = opt,
+            Font = FONT.reg, TextSize = 12, TextColor3 = Color3.fromRGB(210,220,215),
+            AutoButtonColor = false, Parent = list, ZIndex = 9,
+        })
+        ob.MouseEnter:Connect(function() ob.BackgroundTransparency = 0.85; ob.BackgroundColor3 = c3(CFG.accent) end)
+        ob.MouseLeave:Connect(function() ob.BackgroundTransparency = 1 end)
+        ob.MouseButton1Click:Connect(function()
+            CFG[key] = opt; btn.Text = opt; list.Visible = false
+            if cb then cb(opt) end
+            saveCfg(); setStatus(lbl..": "..opt)
+        end)
+    end
+    btn.MouseButton1Click:Connect(function()
+        list.Visible = not list.Visible
+        tw(list, 0.12, {Size = UDim2.new(0,150,0,list.Visible and (#options*28+8) or 0)})
+    end)
+end
+
+local function keybind(parent, lbl, key, cb)
+    local r = card(parent, 32)
+    label(r, lbl, 13)
+    local btn = new("TextButton", {
+        Size = UDim2.new(0,150,0,24), Position = UDim2.new(1,-160,0.5,-12),
+        BackgroundColor3 = Color3.fromRGB(22,28,24), Text = tostring(CFG[key]),
+        Font = FONT.reg, TextSize = 12, TextColor3 = Color3.fromRGB(220,230,225),
+        AutoButtonColor = false, Parent = r,
+    })
+    corner(btn, 6); stroke(btn, Color3.fromRGB(50,68,58), 1, 0.4)
+    local listening = false
+    btn.MouseButton1Click:Connect(function()
+        listening = true; btn.Text = "press..."; btn.TextColor3 = c3(CFG.accent)
+    end)
+    UIS.InputBegan:Connect(function(i, gp)
+        if not listening then return end
+        listening = false
+        local name = "None"
+        if i.UserInputType == Enum.UserInputType.Keyboard then name = i.KeyCode.Name
+        elseif i.UserInputType == Enum.UserInputType.MouseButton1 then name = "LMB"
+        elseif i.UserInputType == Enum.UserInputType.MouseButton2 then name = "RMB"
+        elseif i.UserInputType == Enum.UserInputType.MouseButton3 then name = "MMB"
+        end
+        CFG[key] = name; btn.Text = name; btn.TextColor3 = Color3.fromRGB(220,230,225)
+        if cb then cb(name) end
+        saveCfg(); setStatus(lbl..": "..name)
+    end)
+end
+
+local function colorPicker(parent, lbl, key, cb)
+    if type(CFG[key]) ~= "table" then CFG[key] = {80,255,140} end
+    local r = card(parent, 116)
+    new("TextLabel", {
+        Size = UDim2.new(1,-80,0,18), Position = UDim2.new(0,12,0,6),
+        BackgroundTransparency = 1, Text = lbl,
+        Font = FONT.reg, TextSize = 13, TextColor3 = Color3.fromRGB(225,235,230),
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = r,
+    })
+    local sw = new("TextButton", {
+        Size = UDim2.new(0,60,0,18), Position = UDim2.new(1,-72,0,6),
+        BackgroundColor3 = c3(CFG[key]), Text = "", AutoButtonColor = false, Parent = r,
+    })
+    corner(sw, 4); stroke(sw, Color3.fromRGB(255,255,255), 1, 0.6)
+    local palette = {
+        {80,255,140},{80,200,255},{255,80,160},{255,220,80},
+        {180,80,255},{255,90,90},{240,240,240},{40,255,220},
+        {255,140,40},{60,120,255},{200,60,255},{60,255,120},
+    }
+    local grid = new("Frame", {
+        Size = UDim2.new(1,-24,0,50), Position = UDim2.new(0,12,0,30),
+        BackgroundTransparency = 1, Parent = r,
+    })
+    new("UIGridLayout", {CellSize = UDim2.new(0,22,0,22), CellPadding = UDim2.new(0,4,0,4), Parent = grid})
+    for _, col in ipairs(palette) do
+        local cbtn = new("TextButton", {
+            Size = UDim2.new(0,22,0,22),
+            BackgroundColor3 = Color3.fromRGB(col[1],col[2],col[3]),
+            Text = "", AutoButtonColor = false, Parent = grid,
+        })
+        corner(cbtn, 4); stroke(cbtn, Color3.fromRGB(255,255,255), 1, 0.85)
+        cbtn.MouseButton1Click:Connect(function()
+            CFG[key] = {col[1],col[2],col[3]}
+            sw.BackgroundColor3 = c3(CFG[key])
+            if key == "accent" then mainStroke.Color = c3(CFG.accent) end
+            if cb then cb(CFG[key]) end
+            saveCfg()
+        end)
+    end
+    local rnd = new("TextButton", {
+        Size = UDim2.new(0,90,0,22), Position = UDim2.new(1,-102,1,-28),
+        BackgroundColor3 = Color3.fromRGB(22,28,24), Text = "RANDOM",
+        Font = FONT.bold, TextSize = 10, TextColor3 = c3(CFG.accent),
+        AutoButtonColor = false, Parent = r,
+    })
+    corner(rnd, 4)
+    rnd.MouseButton1Click:Connect(function()
+        CFG[key] = {math.random(60,255), math.random(60,255), math.random(60,255)}
+        sw.BackgroundColor3 = c3(CFG[key])
+        if key == "accent" then mainStroke.Color = c3(CFG.accent) end
+        if cb then cb(CFG[key]) end
+        saveCfg()
+    end)
+end
+
+local function button(parent, lbl, color, cb, txtcol)
+    local b = new("TextButton", {
+        Size = UDim2.new(1,-4,0,30), BackgroundColor3 = color or Color3.fromRGB(22,28,24),
+        Text = lbl, Font = FONT.bold, TextSize = 12,
+        TextColor3 = txtcol or c3(CFG.accent), AutoButtonColor = false, Parent = parent,
+    })
+    corner(b, 6); stroke(b, c3(CFG.accent), 1, 0.6)
+    b.MouseEnter:Connect(function() tw(b, 0.1, {BackgroundColor3 = Color3.fromRGB(30,40,34)}) end)
+    b.MouseLeave:Connect(function() tw(b, 0.1, {BackgroundColor3 = color or Color3.fromRGB(22,28,24)}) end)
+    b.MouseButton1Click:Connect(cb)
+    return b
+end
+
+local function modeRow(parent)
+    section(parent, "MODE")
+    local r = card(parent, 32)
+    label(r, "Config preset", 13)
+    local holder = new("Frame", {
+        Size = UDim2.new(0,240,1,0), Position = UDim2.new(1,-250,0,0),
+        BackgroundTransparency = 1, Parent = r,
+    })
+    local btns = {}
+    local function rebuild()
+        for _, b in ipairs(btns) do b:Destroy() end
+        btns = {}
+        for i, n in ipairs({"LEGIT","MEDIUM","RAGE"}) do
+            local b = new("TextButton", {
+                Size = UDim2.new(0,74,0,24),
+                Position = UDim2.new(0,(i-1)*78,0.5,-12),
+                BackgroundColor3 = (n == currentMode) and c3(CFG.accent) or Color3.fromRGB(22,28,24),
+                Text = n, Font = FONT.bold, TextSize = 11,
+                TextColor3 = (n == currentMode) and Color3.fromRGB(8,20,12) or Color3.fromRGB(200,215,208),
+                AutoButtonColor = false, Parent = holder,
+            })
+            corner(b, 6)
+            b.MouseButton1Click:Connect(function()
+                currentMode = n
+                for k, v in pairs(MODES[n]) do CFG[k] = v end
+                saveCfg(); rebuild()
+                if modeLbl then modeLbl.Text = "MODE: "..n end
+                setStatus("mode: "..n)
+            end)
+            btns[#btns+1] = b
+        end
+    end
+    rebuild()
+end
+
+-- ===================== PAGES =====================
+local aim = pages["AIM"]
+modeRow(aim)
+section(aim, "AIMBOT")
+toggle(aim, "Enable aimbot", "aim_enabled")
+keybind(aim, "Aim key", "aim_key")
+dropdown(aim, "Aim part", "aim_part", {"Head","UpperTorso","HumanoidRootPart","LowerTorso"})
+dropdown(aim, "Mode", "aim_mode", {"Camera","Mouse","Silent"})
+toggle(aim, "Nearest to crosshair", "aim_nearest_to_crosshair")
+slider(aim, "FOV", "aim_fov", 10, 500, 1)
+slider(aim, "Smooth", "aim_smooth", 0.02, 0.9, 0.01, function(v) return string.format("%.2f", v) end)
+slider(aim, "Prediction", "aim_prediction", 0, 0.5, 0.01, function(v) return string.format("%.2f s", v) end)
+slider(aim, "Max distance", "aim_dist_limit", 100, 5000, 50, function(v) return string.format("%d m", v) end)
+toggle(aim, "Wall check", "aim_wall_check")
+toggle(aim, "Auto-fire", "auto_fire")
+slider(aim, "Auto-fire delay", "auto_fire_delay", 10, 500, 10, function(v) return string.format("%d ms", v) end)
+section(aim, "TARGET FILTER")
+toggle(aim, "Ignore Innocent", "aim_ignore_innocent")
+toggle(aim, "Ignore Sheriff", "aim_ignore_sheriff")
+section(aim, "RECOIL")
+toggle(aim, "No-recoil", "norecoil")
+slider(aim, "Recoil strength", "norecoil_strength", 0, 1, 0.05, function(v) return string.format("%.2f", v) end)
+
+local trig = pages["TRIGGER"]
+section(trig, "TRIGGERBOT")
+toggle(trig, "Enable triggerbot", "trigger_enabled")
+dropdown(trig, "Mode", "trigger_mode", {"Cursor","FOV"})
+slider(trig, "Delay", "trigger_delay", 0, 300, 5, function(v) return string.format("%d ms", v) end)
+keybind(trig, "Hold key (None = always)", "trigger_key")
+
+local esp = pages["ESP"]
+section(esp, "ESP")
+toggle(esp, "ESP master", "esp_enabled")
+toggle(esp, "Box", "esp_box")
+toggle(esp, "Box fill", "esp_fill")
+slider(esp, "Fill transparency", "esp_fill_transparency", 0, 1, 0.05, function(v) return string.format("%.2f", v) end)
+toggle(esp, "Skeleton", "esp_skel")
+toggle(esp, "Name", "esp_name")
+toggle(esp, "Health", "esp_health")
+toggle(esp, "Distance", "esp_dist")
+toggle(esp, "Tracer", "esp_tracer")
+section(esp, "MM2")
+toggle(esp, "Role color", "esp_role_color")
+toggle(esp, "Role text", "esp_role_text")
+toggle(esp, "Weapon label", "esp_weapon")
+toggle(esp, "Drop items", "esp_drop_items")
+toggle(esp, "Streamer mode", "streamer_mode")
+section(esp, "SIZING")
+slider(esp, "Box thickness", "esp_thickness", 1, 5, 0.5, function(v) return string.format("%.1f px", v) end)
+slider(esp, "Skeleton thickness", "esp_skel_thickness", 1, 5, 0.5, function(v) return string.format("%.1f px", v) end)
+slider(esp, "Distance limit", "esp_dist_limit", 50, 5000, 50, function(v) return string.format("%d m", v) end)
+
+local vis = pages["VISUAL"]
+section(vis, "VISUALS")
+toggle(vis, "Glow / chams", "glow_enabled")
+slider(vis, "Glow transparency", "glow_fill_transp", 0, 1, 0.05, function(v) return string.format("%.2f", v) end)
+toggle(vis, "FOV circle", "fov_circle")
+toggle(vis, "FOV pulse", "fov_pulse")
+toggle(vis, "Watermark", "watermark")
+toggle(vis, "TG watermark", "tg_watermark")
+toggle(vis, "FPS counter", "fps_counter")
+toggle(vis, "Hitmarker", "hitmarker")
+toggle(vis, "Particles", "particles")
+toggle(vis, "Aurora glow", "aurora")
+toggle(vis, "Animations", "anim")
+section(vis, "MENU")
+slider(vis, "Menu scale", "menu_scale", 0.8, 1.3, 0.05, function(v) return string.format("%.2f x", v) end, function(v)
+    main.Size = UDim2.new(0, W*v, 0, H*v)
+end)
+
+local cfgp = pages["CONFIG"]
+section(cfgp, "COLORS")
+colorPicker(cfgp, "Accent", "accent")
+colorPicker(cfgp, "ESP color", "esp_color")
+colorPicker(cfgp, "Box color", "esp_box_color")
+colorPicker(cfgp, "FOV circle", "fov_color")
+colorPicker(cfgp, "Aim FOV color", "aim_fov_color")
+section(cfgp, "KEYS")
+dropdown(cfgp, "Menu key", "menu_key", {"RightShift","Insert","F1","F2","F4","End","Delete"})
+dropdown(cfgp, "Panic key", "panic_key", {"End","Delete","F1","F2","F4"})
+section(cfgp, "PROFILES")
+button(cfgp, "SAVE CONFIG", nil, function() saveCfg(); setStatus("config saved") end)
+button(cfgp, "LOAD CONFIG", nil, function() loadCfg(); setStatus("config loaded") end)
+button(cfgp, "EXPORT TO CLIPBOARD", nil, function()
+    if setclipboard then pcall(setclipboard, HS:JSONEncode(CFG)); setStatus("copied") else setStatus("setclipboard n/a") end
+end)
+button(cfgp, "COPY TG", nil, function()
+    if setclipboard then pcall(setclipboard, TELEGRAM); setStatus("tg: "..TELEGRAM) end
+end)
+button(cfgp, "RESET & RELOAD", Color3.fromRGB(40,20,24), function()
+    if HAS_FS then
+        pcall(function() if isfile(CFG_PATH) then delfile(CFG_PATH) end end)
+        pcall(function() if isfile(POS_PATH) then delfile(POS_PATH) end end)
+    end
+    if _G.SS_INSTANCE.destroy then _G.SS_INSTANCE.destroy() end
+end, Color3.fromRGB(255,140,140))
+section(cfgp, "MISC")
+toggle(cfgp, "Auto-rejoin on death", "auto_rejoin_on_death")
+section(cfgp, "CONTACT")
+local infoCard = card(cfgp, 64)
+new("TextLabel", {
+    Size = UDim2.new(1,-20,0,20), Position = UDim2.new(0,12,0,8),
+    BackgroundTransparency = 1, Text = "tg "..TELEGRAM,
+    Font = FONT.bold, TextSize = 15, TextColor3 = Color3.fromRGB(120,220,160),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = infoCard,
+})
+new("TextLabel", {
+    Size = UDim2.new(1,-20,0,16), Position = UDim2.new(0,12,0,32),
+    BackgroundTransparency = 1, Text = "проблемы, баги, апдейты — туда",
+    Font = FONT.reg, TextSize = 11, TextColor3 = Color3.fromRGB(170,185,175),
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = infoCard,
+})
+
+-- ===================== DRAG =====================
+do
+    local dragging, dragStart, startPos
+    local function bindDrag(el)
+        el.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging, dragStart, startPos = true, i.Position, main.Position
+            end
+        end)
+    end
+    bindDrag(topbar)
+    UIS.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        pcall(function()
+            local d = i.Position - dragStart
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                       startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end)
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 and dragging then
+            dragging = false; savePos(main.Position)
+        end
+    end)
+end
+
+-- ===================== MENU KEY =====================
+local MENU_MAP = {
+    RightShift = Enum.KeyCode.RightShift, Insert = Enum.KeyCode.Insert,
+    F1 = Enum.KeyCode.F1, F2 = Enum.KeyCode.F2, F4 = Enum.KeyCode.F4,
+    End = Enum.KeyCode.End, Delete = Enum.KeyCode.Delete,
+}
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.KeyCode == MENU_MAP[CFG.menu_key] and main.Visible then
+        gui.Enabled = not gui.Enabled
+    end
+end)
+
+-- ===================== UNLOCK =====================
+local unlocked = false
+function unlock()
+    if unlocked then return end
+    unlocked = true
+    tw(launch, 0.35, {BackgroundTransparency = 1})
+    for _, ch in ipairs(launch:GetDescendants()) do
+        if ch:IsA("TextLabel") or ch:IsA("TextButton") then
+            tw(ch, 0.25, {TextTransparency = 1, BackgroundTransparency = 1})
+        end
+        if ch:IsA("UIStroke") then tw(ch, 0.25, {Transparency = 1}) end
+        if ch:IsA("Frame") then tw(ch, 0.25, {BackgroundTransparency = 1}) end
+    end
+    task.wait(0.4)
+    launch:Destroy()
+    main.Visible = true
+    main.BackgroundTransparency = 1
+    tw(main, 0.5, {BackgroundTransparency = 0})
+    selectTab("AIM")
+    setStatus("access granted · "..TELEGRAM)
+    _G.SS_INSTANCE.destroy = function()
+        pcall(function() gui:Destroy() end)
+        pcall(function() for _, d in pairs(draws or {}) do if hide then hide(d) end end end)
+        pcall(function()
+            for _, plr in ipairs(Players:GetPlayers()) do
+                local ch = plr.Character
+                if ch then
+                    local hl = ch:FindFirstChild("SS_GLOW")
+                    if hl then hl:Destroy() end
+                end
+            end
+        end)
+        pcall(function() if oldNamecall then hookmetamethod(game, "__namecall", oldNamecall) end end)
+    end
+end
+
+enterButton.MouseButton1Click:Connect(unlock)
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.KeyCode == Enum.KeyCode.J and not unlocked then unlock() end
+end)
+
+selectTab("AIM")
+
+-- =====================================================================
+--  PART 1 ЗАВЕРШЁН
+--  Дальше PART 2: aim helpers, silent hook, drawing ESP, trigger, no-recoil,
+--  main loop, auto-rejoin, kill-feed, hitmarker. Скажи «часть 2» и продолжу.
+-- =====================================================================
+-- =====================================================================
+--  PART 2/3 — aim, trigger, silent, ESP, main loop
+-- =====================================================================
+
+-- ===================== INPUT MAP =====================
+local function keyToInput(name)
+    if name == "RMB" then return Enum.UserInputType.MouseButton2 end
+    if name == "LMB" then return Enum.UserInputType.MouseButton1 end
+    if name == "MMB" then return Enum.UserInputType.MouseButton3 end
+    return Enum.KeyCode[name] or Enum.KeyCode.Unknown
+end
+
+local aimHeld, trigHeld = false, false
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.UserInputType == keyToInput(CFG.aim_key) or i.KeyCode == keyToInput(CFG.aim_key) then aimHeld = true end
+    if CFG.trigger_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.trigger_key) or i.KeyCode == keyToInput(CFG.trigger_key)) then
+        trigHeld = true
+    end
+    if i.KeyCode == MENU_MAP[CFG.panic_key] then
+        CFG.aim_enabled = false; CFG.esp_enabled = false; CFG.trigger_enabled = false
+        CFG.glow_enabled = false; CFG.norecoil = false; CFG.auto_fire = false
+        for k, b in pairs(quickBtns) do
+            b.BackgroundColor3 = Color3.fromRGB(16,22,18)
+            b.TextColor3 = Color3.fromRGB(180,190,185)
+        end
+        setStatus("PANIC")
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == keyToInput(CFG.aim_key) or i.KeyCode == keyToInput(CFG.aim_key) then aimHeld = false end
+    if CFG.trigger_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.trigger_key) or i.KeyCode == keyToInput(CFG.trigger_key)) then
+        trigHeld = false
+    end
+end)
+
+-- ===================== HELPERS =====================
+local function isAlive(plr)
+    local ch = plr.Character
+    if not ch then return false end
+    local h = ch:FindFirstChildOfClass("Humanoid")
+    return h and h.Health > 0
+end
+
+local function onScreen(pos)
+    local sp, vis = Cam:WorldToViewportPoint(pos)
+    return vis and sp.Z > 0, Vector2.new(sp.X, sp.Y)
+end
+
+-- MM2 role resolver с кэшем
+function getRole(plr)
+    local cached = cache.roleCache[plr]
+    if cached then return cached end
+    local ch = plr.Character
+    if not ch then return "Unknown" end
+    local r
+    if ch:FindFirstChild("Knife") then r = "Killer"
+    elseif ch:FindFirstChild("Gun") or ch:FindFirstChild("Revolver") then r = "Sheriff"
+    else
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        r = (hum and hum.Health > 0) and "Innocent" or "Unknown"
+    end
+    cache.roleCache[plr] = r
+    return r
+end
+
+local function getWeapon(plr)
+    local ch = plr.Character
+    if not ch then return nil end
+    for _, tool in ipairs(ch:GetChildren()) do
+        if tool:IsA("Tool") then return tool.Name end
+    end
+    return nil
+end
+
+local function roleColor(plr)
+    if not CFG.esp_role_color then return c3(CFG.esp_color) end
+    local r = getRole(plr)
+    return c3(CFG.role_colors[r] or CFG.role_colors.Unknown)
+end
+
+local function targetFilter(plr)
+    local role = getRole(plr)
+    if CFG.aim_ignore_innocent and role == "Innocent" then return false end
+    if CFG.aim_ignore_sheriff and role == "Sheriff" then return false end
+    return true
+end
+
+-- ===================== AIM =====================
+local function closestTarget()
+    local best, bestD = nil, CFG.aim_fov
+    local center = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+    local players = Players:GetPlayers()
+    for i = 1, #players do
+        local plr = players[i]
+        if plr ~= LP and isAlive(plr) and targetFilter(plr) then
+            local ch = plr.Character
+            local part = ch:FindFirstChild(CFG.aim_part) or ch:FindFirstChild("HumanoidRootPart")
+            if part then
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if not hrp or (Cam.CFrame.Position - hrp.Position).Magnitude <= CFG.aim_dist_limit then
+                    local vis, sp = onScreen(part.Position)
+                    if vis then
+                        local d = (sp - center).Magnitude
+                        if d < bestD then
+                            if CFG.aim_wall_check then
+                                local dir = part.Position - Cam.CFrame.Position
+                                local ray = Ray.new(Cam.CFrame.Position, dir.Unit * dir.Magnitude)
+                                local hit = WS:FindPartOnRayWithIgnoreList(ray, {LP.Character})
+                                if not hit or hit:IsDescendantOf(ch) then
+                                    best, bestD = part, d
+                                end
+                            else
+                                best, bestD = part, d
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function cursorTarget()
+    local m = Mouse.Target
+    if not m then return nil end
+    local model = m:FindFirstAncestorOfClass("Model")
+    if not model then return nil end
+    local plr = Players:GetPlayerFromCharacter(model)
+    if not plr or plr == LP then return nil end
+    return plr, m
+end
+
+-- ===================== SILENT HOOK =====================
+local oldNamecall
+if hookmetamethod and getnamecallmethod then
+    pcall(function()
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            if CFG.aim_enabled and CFG.aim_mode == "Silent"
+               and (method == "Fire" or method == "FindPartOnRay") then
+                local target = closestTarget()
+                if target then
+                    local args = {...}
+                    for i, a in ipairs(args) do
+                        if typeof(a) == "Vector3" then
+                            args[i] = (target.Position - Cam.CFrame.Position).Unit
+                            break
+                        end
+                    end
+                    return oldNamecall(self, table.unpack(args))
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+    end)
+end
+
+-- ===================== DRAWINGS POOL =====================
+local draws = {}
+local activeDraws = {}
+
+local function makeDraw()
+    local d = {
+        box     = Drawing.new("Square"),
+        boxFill = Drawing.new("Square"),
+        name    = Drawing.new("Text"),
+        hp      = Drawing.new("Text"),
+        dist    = Drawing.new("Text"),
+        weapon  = Drawing.new("Text"),
+        role    = Drawing.new("Text"),
+        tracer  = Drawing.new("Line"),
+        skel    = {},
+    }
+    d.box.Filled = false
+    d.boxFill.Filled = true
+    d.boxFill.Transparency = CFG.esp_fill_transparency
+    d.name.Size = 14; d.name.Center = true; d.name.Outline = true
+    d.hp.Size = 13; d.hp.Outline = true; d.hp.Color = Color3.fromRGB(80,255,120)
+    d.dist.Size = 13; d.dist.Center = true; d.dist.Outline = true
+    d.weapon.Size = 12; d.weapon.Center = true; d.weapon.Outline = true
+    d.role.Size = 12; d.role.Center = true; d.role.Outline = true
+    d.tracer.Thickness = 1
+    for i = 1, 20 do
+        local l = Drawing.new("Line")
+        l.Visible = false
+        d.skel[i] = l
+    end
+    return d
+end
+
+local function getDraw(plr)
+    local d = draws[plr]
+    if not d then
+        d = makeDraw()
+        draws[plr] = d
+    end
+    activeDraws[plr] = true
+    return d
+end
+
+local function hide(d)
+    d.box.Visible = false; d.boxFill.Visible = false
+    d.name.Visible = false; d.hp.Visible = false; d.dist.Visible = false
+    d.weapon.Visible = false; d.role.Visible = false
+    d.tracer.Visible = false
+    for _, l in ipairs(d.skel) do l.Visible = false end
+end
+
+local R6 = {
+    {"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},
+    {"Torso","Left Leg"},{"Torso","Right Leg"},
+}
+local R15 = {
+    {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
+    {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
+    {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
+    {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
+    {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
+}
+
+-- ===================== GLOBAL DRAWINGS =====================
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 1.5; fovCircle.NumSides = 60; fovCircle.Filled = false
+local fovPulse = 1
+
+local wm = Drawing.new("Text")
+wm.Size = 14; wm.Outline = true; wm.Position = Vector2.new(12,12)
+wm.Color = c3(CFG.accent)
+
+local wmTg = Drawing.new("Text")
+wmTg.Size = 12; wmTg.Outline = true; wmTg.Position = Vector2.new(12,30)
+wmTg.Color = Color3.fromRGB(120,220,160); wmTg.Text = TG_URL
+
+local fpsTxt = Drawing.new("Text")
+fpsTxt.Size = 14; fpsTxt.Outline = true
+fpsTxt.Position = Vector2.new(12,48); fpsTxt.Color = Color3.fromRGB(180,255,180)
+
+local hitmark = Drawing.new("Line")
+hitmark.Visible = false; hitmark.Thickness = 2; hitmark.Color = Color3.fromRGB(255,255,255)
+local hitmark2 = Drawing.new("Line")
+hitmark2.Visible = false; hitmark2.Thickness = 2; hitmark2.Color = Color3.fromRGB(255,255,255)
+local hitmarkT = 0
+
+-- kill feed
+local killFeed = Drawing.new("Text")
+killFeed.Size = 14; killFeed.Outline = true
+killFeed.Position = Vector2.new(12, 70)
+killFeed.Color = Color3.fromRGB(255, 200, 120)
+local killFeedText = ""
+local killFeedT = 0
+
+local dropDraws = {}
+local function getDropDraw()
+    local d = { text = Drawing.new("Text") }
+    d.text.Size = 12; d.text.Center = true; d.text.Outline = true
+    d.text.Color = Color3.fromRGB(255,220,80)
+    return d
+end
+
+-- ===================== TRIGGER =====================
+local lastTrig, lastAutoFire = 0, 0
+local function tryTrigger()
+    if not CFG.trigger_enabled then return end
+    if CFG.trigger_key ~= "None" and not trigHeld then return end
+    local plr
+    if CFG.trigger_mode == "Cursor" then
+        plr = cursorTarget()
+    else
+        local t = closestTarget()
+        if t then plr = Players:GetPlayerFromCharacter(t.Parent) end
+    end
+    if not plr then return end
+    if not targetFilter(plr) then return end
+    local now = tick() * 1000
+    if now - lastTrig < CFG.trigger_delay then return end
+    lastTrig = now
+    if mouse1click then pcall(mouse1click) end
+end
+
+-- ===================== NO-RECOIL =====================
+RunService.RenderStepped:Connect(function()
+    if CFG.norecoil and LP.Character then
+        local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local y = hum.CameraOffset.Y
+            if math.abs(y) > 0.001 then
+                hum.CameraOffset = hum.CameraOffset - Vector3.new(0, y * CFG.norecoil_strength, 0)
+            end
+        end
+    end
+end)
+
+-- ===================== KILL FEED =====================
+task.spawn(function()
+    local ok = pcall(function()
+        local rf = game:GetService("ReplicatedStorage")
+        for _, c in ipairs(rf:GetDescendants()) do
+            if c:IsA("RemoteEvent") and (c.Name:lower():find("kill") or c.Name:lower():find("death")) then
+                c.OnClientEvent:Connect(function(v1, v2)
+                    local a = typeof(v1) == "Instance" and v1.Name or tostring(v1)
+                    local b = typeof(v2) == "Instance" and v2.Name or tostring(v2)
+                    killFeedText = a .. "  →  " .. b
+                    killFeedT = 3
+                end)
+            end
+        end
+    end)
+end)
+
+-- ===================== MAIN LOOP =====================
+local frameCount, fpsAcc = 0, 0
+local lastAimTarget = nil
+
+RunService.RenderStepped:Connect(function(dt)
+    frameCount = frameCount + 1; fpsAcc = fpsAcc + dt
+    if fpsAcc >= 0.5 then
+        fpsTxt.Text = string.format("FPS %d", math.floor(frameCount / fpsAcc))
+        frameCount, fpsAcc = 0, 0
+    end
+
+    if not unlocked then return end
+    Cam = WS.CurrentCamera
+    local acc = c3(CFG.accent)
+
+    -- watermark / fps
+    wm.Visible = CFG.watermark
+    wm.Color = acc
+    wm.Text = "СЛЁЗЫ САТАНЫ v" .. VERSION .. "  |  MM2"
+    wmTg.Visible = CFG.tg_watermark
+    fpsTxt.Visible = CFG.fps_counter
+
+    -- fov circle
+    fovPulse = 1 + math.sin(tick() * 3) * 0.08
+    fovCircle.Visible = CFG.fov_circle and CFG.aim_enabled
+    fovCircle.Position = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+    fovCircle.Radius = CFG.fov_pulse and (CFG.aim_fov * fovPulse) or CFG.aim_fov
+    fovCircle.Color = c3(CFG.aim_fov_color or CFG.fov_color)
+
+    -- hitmarker
+    if hitmarkT > 0 then
+        hitmarkT = hitmarkT - dt
+        if hitmarkT <= 0 then
+            hitmark.Visible = false; hitmark2.Visible = false
+        end
+    end
+
+    -- killfeed
+    if killFeedT > 0 then
+        killFeedT = killFeedT - dt
+        killFeed.Text = killFeedText
+        killFeed.Visible = CFG.hitmarker
+    else
+        killFeed.Visible = false
+    end
+
+    -- aim
+    if CFG.aim_enabled and aimHeld and CFG.aim_mode ~= "Silent" then
+        local t = closestTarget()
+        lastAimTarget = t
+        if t then
+            local target = t.Position
+            if CFG.aim_prediction > 0 then
+                target = target + (t.AssemblyLinearVelocity or Vector3.zero) * CFG.aim_prediction
+            end
+            local goal = CFrame.new(Cam.CFrame.Position, target)
+            if CFG.aim_mode == "Camera" then
+                Cam.CFrame = Cam.CFrame:Lerp(goal, 1 - CFG.aim_smooth)
+            elseif CFG.aim_mode == "Mouse" and mousemoverel then
+                local sp = Cam:WorldToViewportPoint(target)
+                local center = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+                local delta = Vector2.new(sp.X, sp.Y) - center
+                mousemoverel(math.floor(delta.X * (1 - CFG.aim_smooth)), math.floor(delta.Y * (1 - CFG.aim_smooth)))
+            end
+            if CFG.auto_fire and mouse1click then
+                local now = tick() * 1000
+                if now - lastAutoFire >= CFG.auto_fire_delay then
+                    lastAutoFire = now
+                    pcall(mouse1click)
+                end
+            end
+            if CFG.hitmarker then
+                local sp = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+                hitmark.From  = sp - Vector2.new(8, 8)
+                hitmark.To    = sp - Vector2.new(3, 3)
+                hitmark2.From = sp + Vector2.new(3, 3)
+                hitmark2.To   = sp + Vector2.new(8, 8)
+                hitmark.Visible = true; hitmark2.Visible = true
+                hitmarkT = 0.14
+            end
+        end
+    end
+
+    tryTrigger()
+
+    -- ESP
+    local players = Players:GetPlayers()
+    local seen = {}
+    for i = 1, #players do
+        local plr = players[i]
+        if plr ~= LP then
+            seen[plr] = true
+            local d = draws[plr]
+            if d then
+                local ch = plr.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if not CFG.esp_enabled or not ch or not hum or hum.Health <= 0 then
+                    hide(d)
+                else
+                    local hrp = ch:FindFirstChild("HumanoidRootPart")
+                    if not hrp then
+                        hide(d)
+                    else
+                        local dist = (Cam.CFrame.Position - hrp.Position).Magnitude
+                        if dist > CFG.esp_dist_limit then
+                            hide(d)
+                        else
+                            local ok, sp = onScreen(hrp.Position)
+                            if not ok then
+                                hide(d)
+                            else
+                                local col = roleColor(plr)
+                                local head = ch:FindFirstChild("Head")
+                                local top, bot
+                                if head then
+                                    local o1, hp = onScreen(head.Position + Vector3.new(0, 0.5, 0))
+                                    local o2, bp = onScreen(hrp.Position - Vector3.new(0, 3, 0))
+                                    if o1 and o2 then top, bot = hp, bp end
+                                end
+
+                                -- box
+                                if top and bot and CFG.esp_box then
+                                    local h = bot.Y - top.Y
+                                    local w = h * 0.6
+                                    local pos = Vector2.new(top.X - w/2, top.Y)
+                                    d.box.Size = Vector2.new(w, h)
+                                    d.box.Position = pos
+                                    d.box.Color = CFG.esp_role_color and col or c3(CFG.esp_box_color)
+                                    d.box.Thickness = CFG.esp_thickness
+                                    d.box.Visible = true
+                                    if CFG.esp_fill then
+                                        d.boxFill.Size = Vector2.new(w, h)
+                                        d.boxFill.Position = pos
+                                        d.boxFill.Color = d.box.Color
+                                        d.boxFill.Transparency = CFG.esp_fill_transparency
+                                        d.boxFill.Visible = true
+                                    else
+                                        d.boxFill.Visible = false
+                                    end
+                                else
+                                    d.box.Visible = false
+                                    d.boxFill.Visible = false
+                                end
+
+                                -- name
+                                d.name.Text = CFG.streamer_mode and "player" or plr.Name
+                                d.name.Position = Vector2.new(sp.X, sp.Y - 46)
+                                d.name.Color = col
+                                d.name.Visible = CFG.esp_name
+
+                                -- hp
+                                d.hp.Text = string.format("%d", math.floor(hum.Health))
+                                d.hp.Position = Vector2.new(sp.X + 40, sp.Y)
+                                d.hp.Visible = CFG.esp_health
+
+                                -- dist
+                                d.dist.Text = string.format("%d m", math.floor(dist))
+                                d.dist.Position = Vector2.new(sp.X, sp.Y + 40)
+                                d.dist.Color = col
+                                d.dist.Visible = CFG.esp_dist
+
+                                -- weapon
+                                if CFG.esp_weapon then
+                                    local wpn = getWeapon(plr)
+                                    d.weapon.Text = wpn and ("["..wpn.."]") or ""
+                                    d.weapon.Position = Vector2.new(sp.X, sp.Y + 56)
+                                    d.weapon.Color = col
+                                    d.weapon.Visible = wpn ~= nil
+                                else
+                                    d.weapon.Visible = false
+                                end
+
+                                -- role
+                                if CFG.esp_role_text then
+                                    d.role.Text = getRole(plr)
+                                    d.role.Position = Vector2.new(sp.X, sp.Y - 62)
+                                    d.role.Color = col
+                                    d.role.Visible = true
+                                else
+                                    d.role.Visible = false
+                                end
+
+                                -- tracer
+                                if CFG.esp_tracer then
+                                    d.tracer.From = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y)
+                                    d.tracer.To = sp
+                                    d.tracer.Color = col
+                                    d.tracer.Visible = true
+                                else
+                                    d.tracer.Visible = false
+                                end
+
+                                -- skeleton
+                                if CFG.esp_skel then
+                                    local set = ch:FindFirstChild("UpperTorso") and R15 or R6
+                                    for k, l in ipairs(d.skel) do
+                                        if k <= #set then
+                                            local a = ch:FindFirstChild(set[k][1])
+                                            local b = ch:FindFirstChild(set[k][2])
+                                            if a and b then
+                                                local o1, p1 = onScreen(a.Position)
+                                                local o2, p2 = onScreen(b.Position)
+                                                if o1 and o2 then
+                                                    l.From = p1; l.To = p2
+                                                    l.Color = col
+                                                    l.Thickness = CFG.esp_skel_thickness
+                                                    l.Visible = true
+                                                else l.Visible = false end
+                                            else l.Visible = false end
+                                        else l.Visible = false end
+                                    end
+                                else
+                                    for _, l in ipairs(d.skel) do l.Visible = false end
+                                end
+
+                                -- glow
+                                if CFG.glow_enabled then
+                                    local hl = ch:FindFirstChild("SS_GLOW")
+                                    if not hl then
+                                        hl = Instance.new("Highlight")
+                                        hl.Name = "SS_GLOW"
+                                        hl.FillColor = col; hl.OutlineColor = col
+                                        hl.FillTransparency = CFG.glow_fill_transp
+                                        hl.Parent = ch
+                                    else
+                                        hl.FillColor = col; hl.OutlineColor = col
+                                        hl.FillTransparency = CFG.glow_fill_transp
+                                    end
+                                else
+                                    local hl = ch:FindFirstChild("SS_GLOW")
+                                    if hl then hl:Destroy() end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ===================== DROP ITEMS (throttled) =====================
+local dropTick = 0
+RunService.Heartbeat:Connect(function(dt)
+    if not unlocked then return end
+    dropTick = dropTick + dt
+    if dropTick < 0.35 then return end
+    dropTick = 0
+    if CFG.esp_drop_items and CFG.esp_enabled then
+        for _, obj in ipairs(WS:GetDescendants()) do
+            if obj:IsA("Tool") and obj.Parent and not obj.Parent:FindFirstChildOfClass("Humanoid") then
+                if not dropDraws[obj] then dropDraws[obj] = getDropDraw() end
+                local dr = dropDraws[obj]
+                local handle = obj:FindFirstChild("Handle")
+                if handle then
+                    local ok, sp = onScreen(handle.Position)
+                    dr.text.Text = obj.Name
+                    dr.text.Position = sp
+                    dr.text.Visible = ok
+                else
+                    dr.text.Visible = false
+                end
+            end
+        end
+    else
+        for _, dr in pairs(dropDraws) do dr.text.Visible = false end
+    end
+end)
+
+-- ===================== CLEANUP =====================
+local function releaseDraw(plr)
+    local d = draws[plr]
+    if d then
+        hide(d)
+        for _, obj in pairs(d) do
+            if typeof(obj) == "table" then
+                for _, l in ipairs(obj) do pcall(function() l:Remove() end) end
+            elseif obj and obj.Remove then
+                pcall(function() obj:Remove() end)
+            end
+        end
+        draws[plr] = nil
+    end
+    cache.roleCache[plr] = nil
+end
+
+Players.PlayerRemoving:Connect(releaseDraw)
+
+-- ===================== AUTO REJOIN =====================
+LP.CharacterAdded:Connect(function()
+    if CFG.auto_rejoin_on_death then
+        task.wait(3)
+        local hum = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then
+            if game.PlaceId then
+                pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, LP) end)
+            end
+        end
+    end
+end)
+
+print(string.format("[СЛЁЗЫ САТАНЫ v%s] PART 2 loaded · %s · menu=%s · panic=%s",
+    VERSION, TELEGRAM, CFG.menu_key, CFG.panic_key))
+    
+    -- =====================================================================
+--  PART 3/3 — обходцы, эффекты, доп функционал
+-- =====================================================================
+
+-- ===================== ANTI-SCAN =====================
+-- периодически возвращаем thread identity если кто-то скинул
+task.spawn(function()
+    while unlocked ~= true or gui.Parent do
+        task.wait(5)
+        if setthreadidentity then pcall(setthreadidentity, 8) end
+    end
+end)
+
+-- hide instance from getgc scanning (если executor даёт)
+pcall(function()
+    if getgenv then
+        getgenv().__SS_HIDDEN = RAND
+    end
+end)
+
+-- ===================== ANTI-AFK =====================
+task.spawn(function()
+    while gui.Parent do
+        task.wait(60)
+        if unlocked then
+            pcall(function()
+                game:GetService("VirtualUser"):CaptureController()
+                game:GetService("VirtualUser"):ClickButton1(Vector2.new(0, 0))
+            end)
+        end
+    end
+end)
+
+-- ===================== BUNNYHOP =====================
+CFG.bhop = false
+CFG.bhop_key = "None"
+CFG.bhop_power = 25
+
+local bhopHeld = false
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if CFG.bhop_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.bhop_key) or i.KeyCode == keyToInput(CFG.bhop_key)) then
+        bhopHeld = true
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if CFG.bhop_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.bhop_key) or i.KeyCode == keyToInput(CFG.bhop_key)) then
+        bhopHeld = false
+    end
+end)
+
+local bhopActivate = false
+RunService.Heartbeat:Connect(function()
+    if not CFG.bhop or not unlocked then return end
+    local active = (CFG.bhop_key == "None") and
+                   (UIS:IsKeyDown(Enum.KeyCode.Space)) or bhopHeld
+    if active and LP.Character then
+        local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.FloorMaterial ~= Enum.Material.Air then
+            hum.Jump = true
+        end
+    end
+end)
+
+-- ===================== SOUND HITMARKER =====================
+local hitSound = nil
+pcall(function()
+    hitSound = Instance.new("Sound")
+    hitSound.SoundId = "rbxassetid://9120386436"
+    hitSound.Volume = 0.6
+    hitSound.Parent = game:GetService("SoundService")
+end)
+
+local function playHit()
+    if hitSound then
+        pcall(function()
+            hitSound:Stop()
+            hitSound:Play()
+        end)
+    end
+end
+
+-- ===================== PARALLAX + HOVER-GLOW КАСКАД =====================
+local parallaxTargets = {}
+local function registerParallax(frame)
+    parallaxTargets[#parallaxTargets + 1] = {
+        obj = frame,
+        baseRot = frame.Rotation,
+        basePos = frame.Position,
+    }
+end
+
+-- регистрируем все существующие карточки во всех страницах
+for _, pg in pairs(pages) do
+    for _, c in ipairs(pg:GetChildren()) do
+        if c:IsA("Frame") and c:FindFirstChildOfClass("UICorner") then
+            registerParallax(c)
+        end
+    end
+end
+
+-- глобальный mouse-move → параллакс
+local lastMouse = Vector2.new()
+UIS.InputChanged:Connect(function(i)
+    if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+    if not CFG.anim then return end
+    local delta = Vector2.new(i.Delta.X, i.Delta.Y)
+    if delta.Magnitude < 0.5 then return end
+    for _, t in ipairs(parallaxTargets) do
+        if t.obj.Parent then
+            local rot = math.clamp(t.obj.Rotation + delta.X * 0.05, -3, 3)
+            t.obj.Rotation = rot
+            -- плавный возврат
+            task.delay(0.4, function()
+                if t.obj and t.obj.Parent then
+                    tw(t.obj, 0.4, {Rotation = t.baseRot})
+                end
+            end)
+        end
+    end
+end)
+
+-- ===================== KEYBIND TOGGLE =====================
+CFG.toggle_key = "None"
+CFG.toggle_target = "aim_enabled"
+
+local TOGGLE_TARGETS = {
+    "aim_enabled", "esp_enabled", "trigger_enabled", "glow_enabled",
+    "norecoil", "auto_fire", "fov_circle", "bhop",
+}
+local toggleHeld = false
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if CFG.toggle_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.toggle_key) or i.KeyCode == keyToInput(CFG.toggle_key)) then
+        if not toggleHeld then
+            toggleHeld = true
+            local key = CFG.toggle_target
+            CFG[key] = not CFG[key]
+            saveCfg()
+            setStatus("toggled: " .. key .. " = " .. tostring(CFG[key]))
+        end
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if CFG.toggle_key ~= "None" and
+       (i.UserInputType == keyToInput(CFG.toggle_key) or i.KeyCode == keyToInput(CFG.toggle_key)) then
+        toggleHeld = false
+    end
+end)
+
+-- ===================== AUTO-KILL BUTTON (опц.) =====================
+-- не авто-клик по игре, а обновление quick кнопок из CFG
+task.spawn(function()
+    while gui.Parent do
+        task.wait(1)
+        if unlocked then
+            for k, b in pairs(quickBtns) do
+                if type(CFG[k]) == "boolean" then
+                    local wantBg  = CFG[k] and Color3.fromRGB(22,44,30) or Color3.fromRGB(16,22,18)
+                    local wantTxt = CFG[k] and c3(CFG.accent) or Color3.fromRGB(180,190,185)
+                    if b.BackgroundColor3 ~= wantBg then b.BackgroundColor3 = wantBg end
+                    if b.TextColor3 ~= wantTxt then b.TextColor3 = wantTxt end
+                end
+            end
+        end
+    end
+end)
+
+-- ===================== NEW WIDGETS (к PART 1 UI) =====================
+-- добавляем страницы bunnyhop, keybind-toggle, звук в VISUAL
+
+section(pages["AIM"], "MISC — MOVEMENT")
+toggle(pages["AIM"], "Bunnyhop", "bhop")
+keybind(pages["AIM"], "Bhop key (None = space)", "bhop_key")
+
+section(pages["VISUAL"], "HITMARKER SOUND")
+local soundRow = card(pages["VISUAL"], 32)
+label(soundRow, "Hitmarker sound", 13)
+local soundInd = new("Frame", {
+    Size = UDim2.new(0,38,0,20), Position = UDim2.new(1,-50,0.5,-10),
+    BackgroundColor3 = hitSound and Color3.fromRGB(80,255,140) or Color3.fromRGB(48,60,54),
+    Parent = soundRow,
+})
+corner(soundInd, 10)
+local soundKnob = new("Frame", {
+    Size = UDim2.new(0,16,0,16),
+    Position = hitSound and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8),
+    BackgroundColor3 = Color3.fromRGB(255,255,255), Parent = soundInd,
+})
+corner(soundKnob, 8)
+soundRow.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        local enabled = hitSound and hitSound.Volume > 0
+        if enabled then
+            if hitSound then hitSound.Volume = 0 end
+            soundInd.BackgroundColor3 = Color3.fromRGB(48,60,54)
+            tw(soundKnob, 0.12, {Position = UDim2.new(0,2,0.5,-8)})
+        else
+            if hitSound then
+                hitSound.Volume = 0.6
+                pcall(function() hitSound:Play() end)
+            end
+            soundInd.BackgroundColor3 = Color3.fromRGB(80,255,140)
+            tw(soundKnob, 0.12, {Position = UDim2.new(1,-18,0.5,-8)})
+        end
+    end
+end)
+
+section(pages["CONFIG"], "KEYBIND TOGGLE")
+keybind(pages["CONFIG"], "Toggle key", "toggle_key")
+dropdown(pages["CONFIG"], "Toggle target", "toggle_target", TOGGLE_TARGETS)
+
+section(pages["CONFIG"], "BHOP")
+toggle(pages["CONFIG"], "Bunnyhop master", "bhop")
+keybind(pages["CONFIG"], "Bhop key", "bhop_key")
+
+-- ===================== HOOK HITMARKER (play sound при hits) =====================
+local oldPlayHit = playHit
+function playHit()
+    oldPlayHit()
+    if hitSound and hitSound.Volume > 0 then
+        pcall(function() hitSound:Play() end)
+    end
+end
+
+-- ===================== DEEP CLEANUP HOOK =====================
+-- переопределяем destroy чтобы отключить все connections
+local allConnections = {}
+local function trackConn(conn)
+    allConnections[#allConnections + 1] = conn
+    return conn
+end
+
+-- если хочешь трекать всё вручную — используй trackConn(...) вместо UIS.InputBegan(...)
+-- (оставлено на будущее, не обязательно к использованию)
+
+local _oldDestroy = _G.SS_INSTANCE.destroy
+_G.SS_INSTANCE.destroy = function()
+    pcall(_oldDestroy)
+    for _, c in ipairs(allConnections) do
+        pcall(function() c:Disconnect() end)
+    end
+    pcall(function() if hitSound then hitSound:Destroy() end end)
+    pcall(function()
+        for _, t in ipairs(parallaxTargets) do
+            if t.obj and t.obj.Parent then t.obj.Rotation = t.baseRot end
+        end
+    end)
+    setStatus("destroyed")
+end
+
+-- ===================== FINAL PRINT =====================
+print(string.format("[СЛЁЗЫ САТАНЫ v%s] ALL PARTS loaded · %s · menu=%s · panic=%s · bhop=%s",
+    VERSION, TELEGRAM, CFG.menu_key, CFG.panic_key, tostring(CFG.bhop)))
